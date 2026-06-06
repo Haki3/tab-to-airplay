@@ -224,13 +224,15 @@
     return list;
   }
 
+  let analysisInfo = null;
+
   function openPanel() {
     open = true; panel.classList.add("open");
     renderLoading();
     gather().then(async (list) => {
-      candidates = list; idx = 0;
-      render(list.length > 0);              // immediate render (analyzing hint)
-      if (!list.length) return;
+      analysisInfo = null;
+      if (!list.length) { candidates = []; render(false); return; }
+      renderChecking(list.length);          // verify playback BEFORE showing candidates
       let res;
       try {
         res = await chrome.runtime.sendMessage({
@@ -241,14 +243,19 @@
       if (res && res.items) {
         const by = {};
         res.items.forEach((a) => { by[a.url] = a; });
-        candidates.forEach((c) => {
+        list.forEach((c) => {
           const a = by[c.src];
-          if (a) { c.durationSec = a.durationSec; c.recommended = a.recommended; c.isMaster = a.isMaster; c.live = a.live; c.score = a.score; c.analyzed = a.ok; }
+          if (a) Object.assign(c, {
+            durationSec: a.durationSec, recommended: a.recommended, isMaster: a.isMaster,
+            live: a.live, score: a.score, playable: a.playable, analyzed: a.ok,
+          });
         });
-        candidates.sort((x, y) => (y.score || 0) - (x.score || 0));
-        idx = 0;
+        candidates = list.filter((c) => c.playable).sort((x, y) => (y.score || 0) - (x.score || 0));
+        analysisInfo = { total: res.total, viable: res.viable };
+      } else {
+        candidates = list; // analysis unavailable -> fall back to the unverified list
       }
-      render(false);
+      idx = 0; render(false);
     });
   }
   function closePanel() { open = false; panel.classList.remove("open"); }
@@ -268,17 +275,28 @@
     panel.querySelector(".x").onclick = closePanel;
   }
 
+  function renderChecking(n) {
+    panel.innerHTML = `
+      <div class="hd"><span class="ic">${AIRPLAY_SVG}</span><span class="t">AirPlay</span>
+        <button class="x" aria-label="Cerrar">×</button></div>
+      <div class="bd"><div class="status"><span class="spinner"></span>Comprobando qué stream reproduce… (${n})</div></div>`;
+    panel.querySelector(".x").onclick = closePanel;
+  }
+
   function render(analyzing) {
     const c = candidates[idx];
     if (!c) {
+      const inner = (analysisInfo && analysisInfo.total > 0)
+        ? `<div class="big">Ningún stream respondió</div>
+           <div class="sub">Detecté ${analysisInfo.total} stream(s), pero ninguno cargó sus segmentos.<br>
+           Puede requerir iniciar sesión o el enlace caducó. Prueba a recargar el video y reintentar.</div>`
+        : `<div class="big">No encontré un video reproducible</div>
+           <div class="sub">Servicios como YouTube cifran el video y no se pueden capturar.<br>
+           Prueba en X, Reddit, webs de noticias, .mp4 directos o reproductores HLS.</div>`;
       panel.innerHTML = `
         <div class="hd"><span class="ic">${AIRPLAY_SVG}</span><span class="t">AirPlay</span>
           <button class="x" aria-label="Cerrar">×</button></div>
-        <div class="bd"><div class="empty">
-          <div class="big">No encontré un video reproducible</div>
-          <div class="sub">Servicios como YouTube cifran el video y no se pueden capturar.<br>
-          Prueba en X, Reddit, webs de noticias, .mp4 directos o reproductores HLS.</div>
-        </div></div>`;
+        <div class="bd"><div class="empty">${inner}</div></div>`;
       panel.querySelector(".x").onclick = closePanel;
       return;
     }

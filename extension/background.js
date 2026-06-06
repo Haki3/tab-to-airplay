@@ -142,8 +142,46 @@ function bestVariant(master, baseUrl) {
   try { return new URL(bestUri, baseUrl).href; } catch (_) { return null; }
 }
 
+// Find the first real segment (or fMP4 init) URI in a media playlist, absolute.
+function firstSegment(media, base) {
+  const lines = media.split(/\r?\n/);
+  for (const ln of lines) {
+    const u = ln.trim();
+    if (!u || u.startsWith("#")) continue;
+    try { return new URL(u, base).href; } catch (_) { return null; }
+  }
+  for (const ln of lines) {
+    if (ln.startsWith("#EXT-X-MAP")) {
+      const m = ln.match(/URI="([^"]+)"/);
+      if (m) { try { return new URL(m[1], base).href; } catch (_) {} }
+    }
+  }
+  return null;
+}
+
+// Confirm a URL actually serves bytes (2xx). Reads only the first bytes, then aborts —
+// this is what tells a real, playable stream apart from one that just hangs/403s.
+async function probeUrl(url, ms = 6500) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { credentials: "include", signal: ctrl.signal, headers: { Range: "bytes=0-1" } });
+    clearTimeout(t);
+    try { await r.body?.cancel(); } catch (_) {}
+    if (!(r.ok || r.status === 206)) return false;
+    // A 2xx can still be an error/landing page reached via redirect — reject those by
+    // content-type. Real segments are video/*, audio/*, image/* (PNG-disguised) or octet.
+    const ct = (r.headers.get("content-type") || "").toLowerCase();
+    if (ct.includes("xml") || ct.includes("html") || ct.includes("json")) return false;
+    return true;
+  } catch (_) {
+    clearTimeout(t);
+    return false;
+  }
+}
+
 async function analyzeOne(it) {
-  const out = { url: it.url, kind: it.kind, ok: false, durationSec: 0, isMaster: false, live: !!it.live };
+  const out = { url: it.url, kind: it.kind, ok: false, playable: false, durationSec: 0, isMaster: false, live: !!it.live };
   const isM3u8 = it.kind === "hls" || /\.m3u8(\?|#|$)/i.test(it.url);
   try {
     if (isM3u8) {
@@ -151,46 +189,44 @@ async function analyzeOne(it) {
       if (r.ok && /#EXTM3U/.test(r.text)) {
         out.ok = true;
         const base = r.finalUrl || it.url;
+        let mediaText = r.text, mediaBase = base;
         if (/#EXT-X-STREAM-INF/.test(r.text)) {
           out.isMaster = true;
           const variant = bestVariant(r.text, base);
-          if (variant) {
-            const v = await fetchText(variant);
-            if (v.ok && /#EXTINF/.test(v.text)) {
-              const d = sumDurations(v.text);
-              out.durationSec = d.total; out.segments = d.segments;
-              out.live = !/#EXT-X-ENDLIST/.test(v.text);
-            }
-          }
-        } else if (/#EXTINF/.test(r.text)) {
-          const d = sumDurations(r.text);
+          const v = variant ? await fetchText(variant) : null;
+          if (v && v.ok && /#EXTINF/.test(v.text)) { mediaText = v.text; mediaBase = v.finalUrl || variant; }
+          else mediaText = null;
+        }
+        if (mediaText && /#EXTINF/.test(mediaText)) {
+          const d = sumDurations(mediaText);
           out.durationSec = d.total; out.segments = d.segments;
-          out.live = !/#EXT-X-ENDLIST/.test(r.text);
+          out.live = !/#EXT-X-ENDLIST/.test(mediaText);
+          const seg = firstSegment(mediaText, mediaBase);
+          out.playable = seg ? await probeUrl(seg) : false;  // real playback check
         }
       }
     } else {
-      const h = await fetch(it.url, { method: "HEAD", credentials: "include" }).catch(() => null);
-      if (h && h.ok) { out.ok = true; out.sizeBytes = parseInt(h.headers.get("content-length") || "0", 10) || 0; }
+      // direct file: a successful ranged GET means it actually serves video bytes
+      out.playable = await probeUrl(it.url);
+      out.ok = out.playable;
     }
-  } catch (_) { /* leave ok=false */ }
+  } catch (_) { /* leave defaults */ }
   return out;
 }
 
 function scoreOf(a) {
-  if (a.durationSec > 0) return a.durationSec;          // real video: longer = better
-  if (a.isMaster && a.ok) return 0.5;                   // master playlist, duration unknown
-  if (a.sizeBytes) return Math.min(a.sizeBytes / 1e6, 0.4); // mp4 size proxy, capped below real durations
-  if (a.ok) return 0.05;
-  return 0;
+  if (!a.playable) return -1;            // dead / stalling -> filtered out of the list
+  if (a.durationSec > 0) return a.durationSec;  // real video: longer = better
+  return 0.5;                            // playable but duration unknown (e.g. live, mp4)
 }
 
 async function analyzeCandidates(items) {
   const analyzed = await Promise.all((items || []).map(analyzeOne));
   analyzed.forEach((a) => { a.score = scoreOf(a); });
   analyzed.sort((x, y) => y.score - x.score);
-  // Mark the best as the likely stream when we have a meaningful signal.
-  if (analyzed.length && analyzed[0].score > 0) analyzed[0].recommended = true;
-  return { items: analyzed };
+  const playable = analyzed.filter((a) => a.playable);
+  if (playable.length) playable[0].recommended = true;
+  return { items: analyzed, viable: playable.length, total: analyzed.length };
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

@@ -28,7 +28,8 @@ So AirPlay Tab Caster splits the job:
 
 - 🎯 **One click.** A floating AirPlay button finds the video you're watching and confirms before sending.
 - 🧠 **Smart stream detection.** When a page exposes several streams, it fetches each playlist, sums the segment durations, and marks the longest real video as the **likely stream** — so you skip ads, previews and clips.
-- 📋 **Picker popup.** Lists every playable video/stream detected in the tab, ranked by duration.
+- ✅ **Playback pre-check.** Before listing anything, it probes the first segment of each candidate and **hides the ones that don't actually load** (dead links, 403s, expired tokens) — no more "tap → stuck loading".
+- 📋 **Picker popup.** Lists only the videos that play, ranked by duration.
 - 🔗 **Real AirPlay.** Plays through `AVPlayer` and the native macOS route picker — not screen mirroring.
 - 🌐 **DNS-resilient.** The relay resolves hosts over **DoH** (like Chrome's Secure DNS), so locally blocked domains still work.
 - 🛡️ **Session-aware.** Forwards your browser **User-Agent + cookies + referer**, so streams behind bot protection load.

@@ -45,16 +45,22 @@ async function collect(tab) {
   return items;
 }
 
-function loading() {
-  listEl.innerHTML = `<div class="state"><div class="spinner"></div><div class="sub">Buscando videos…</div></div>`;
+let analysisInfo = null;
+
+function loading(msg) {
+  listEl.innerHTML = `<div class="state"><div class="spinner"></div><div class="sub">${esc(msg || "Buscando videos…")}</div></div>`;
 }
 
 function render(items, tab) {
   if (!items.length) {
-    listEl.innerHTML = `<div class="state">
-      <div class="big warn">No encontré un video reproducible</div>
-      <div class="sub">YouTube y similares cifran el video (no se puede capturar).<br>
-      Funciona en X, Reddit, .mp4 directos y reproductores HLS.</div></div>`;
+    const inner = (analysisInfo && analysisInfo.total > 0)
+      ? `<div class="big warn">Ningún stream respondió</div>
+         <div class="sub">Detecté ${analysisInfo.total} stream(s), pero ninguno cargó sus segmentos.<br>
+         Puede requerir iniciar sesión o el enlace caducó. Recarga el video y reintenta.</div>`
+      : `<div class="big warn">No encontré un video reproducible</div>
+         <div class="sub">YouTube y similares cifran el video (no se puede capturar).<br>
+         Funciona en X, Reddit, .mp4 directos y reproductores HLS.</div>`;
+    listEl.innerHTML = `<div class="state">${inner}</div>`;
     return;
   }
   listEl.innerHTML = "";
@@ -102,26 +108,31 @@ async function send(it, tab, btn) {
 (async () => {
   loading();
   const tab = await activeTab();
-  const items = await collect(tab);
-  render(items, tab);
-  if (!items.length) return;
+  const found = await collect(tab);
+  if (!found.length) { render([], tab); return; }
 
-  toast("Analizando candidatos para detectar el video real…");
+  // Verify which candidates actually play (segments load) BEFORE listing them.
+  loading("Comprobando qué stream reproduce…");
   let res;
   try {
     res = await chrome.runtime.sendMessage({
-      type: "analyze", items: items.map((c) => ({ url: c.src, kind: c.kind, live: c.live })),
+      type: "analyze", items: found.map((c) => ({ url: c.src, kind: c.kind, live: c.live })),
     });
   } catch (_) {}
+
+  let items = found;
   if (res && res.items) {
     const by = {};
     res.items.forEach((a) => { by[a.url] = a; });
-    items.forEach((c) => {
+    found.forEach((c) => {
       const a = by[c.src];
-      if (a) { c.durationSec = a.durationSec; c.recommended = a.recommended; c.isMaster = a.isMaster; c.live = a.live; c.score = a.score; }
+      if (a) Object.assign(c, {
+        durationSec: a.durationSec, recommended: a.recommended, isMaster: a.isMaster,
+        live: a.live, score: a.score, playable: a.playable,
+      });
     });
-    items.sort((x, y) => (y.score || 0) - (x.score || 0));
-    render(items, tab);
+    items = found.filter((c) => c.playable).sort((x, y) => (y.score || 0) - (x.score || 0));
+    analysisInfo = { total: res.total, viable: res.viable };
   }
-  toastEl.className = "toast"; // hide the analyzing notice
+  render(items, tab);
 })();
