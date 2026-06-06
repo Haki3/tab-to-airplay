@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      width: 344px; margin: 0;
+      background: #1c1c1e; color: #f2f2f4;
+      font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+    header {
+      display: flex; align-items: center; gap: 10px;
+      padding: 15px 16px 12px; border-bottom: .5px solid rgba(255,255,255,.08);
+      background: linear-gradient(180deg, rgba(10,132,255,.10), transparent);
+    }
+    header .ic { width: 32px; height: 32px; border-radius: 9px; background: rgba(10,132,255,.18);
+                 color: #4da3ff; display: grid; place-items: center; flex: none; }
+    header .ic svg { width: 19px; height: 19px; }
+    header .tt { font-size: 15px; font-weight: 680; letter-spacing: -.01em; }
+    header .sub { font-size: 11px; color: #98989d; margin-top: 1px; }
+
+    .list { max-height: 380px; overflow-y: auto; padding: 8px; }
+    .list::-webkit-scrollbar { width: 8px; }
+    .list::-webkit-scrollbar-thumb { background: rgba(255,255,255,.14); border-radius: 4px; }
+
+    .card {
+      background: #2a2a2c; border-radius: 12px; padding: 11px 12px; margin: 6px;
+      display: flex; flex-direction: column; gap: 8px;
+      transition: background .12s ease;
+    }
+    .card:hover { background: #313134; }
+    .card .top { display: flex; align-items: center; gap: 8px; }
+    .card .name { font-weight: 620; font-size: 13px; }
+    .chip { font-size: 10px; font-weight: 750; letter-spacing: .03em; text-transform: uppercase;
+            padding: 2px 7px; border-radius: 999px; background: rgba(10,132,255,.2); color: #6cb2ff; margin-left: auto; }
+    .chip.live { background: rgba(48,209,88,.2); color: #4fd877; }
+    .card .url { font-size: 11px; color: #8e8e93; word-break: break-all; line-height: 1.35;
+                 max-height: 2.7em; overflow: hidden; }
+    .card button {
+      align-self: stretch; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+      background: #0a84ff; color: #fff; border: none; border-radius: 9px; padding: 9px 12px;
+      cursor: pointer; font: 650 12.5px -apple-system, system-ui; transition: background .12s, transform .08s;
+    }
+    .card button svg { width: 16px; height: 16px; }
+    .card button:hover { background: #0a78ec; }
+    .card button:active { transform: scale(.97); }
+    .card button:disabled { opacity: .6; cursor: default; }
+
+    .state { padding: 26px 22px; text-align: center; }
+    .state .spinner { width: 22px; height: 22px; margin: 0 auto 12px; border-radius: 50%;
+                      border: 2.5px solid rgba(255,255,255,.18); border-top-color: #4da3ff; animation: spin .7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .state .big { font-size: 13.5px; font-weight: 640; margin-bottom: 7px; }
+    .state .big.warn { color: #ffb340; }
+    .state .sub { font-size: 11.5px; color: #98989d; line-height: 1.55; }
+
+    .toast {
+      margin: 0 8px 8px; border-radius: 10px; padding: 10px 12px; font-size: 12px; display: none;
+      align-items: center; gap: 8px; background: #2a2a2c;
+    }
+    .toast.show { display: flex; }
+    .ok { color: #4fd877; } .warn { color: #ffb340; } .err { color: #ff6961; }
+
+    footer { padding: 9px 16px 12px; border-top: .5px solid rgba(255,255,255,.08);
+             font-size: 10.5px; color: #6e6e73; display: flex; justify-content: space-between; }
+    footer a { color: #6e6e73; text-decoration: none; }
+    footer a:hover { color: #98989d; }
+  </style>
+</head>
+<body>
+  <header>
+    <span class="ic" id="logo"></span>
+    <div>
+      <div class="tt">AirPlay Tab Caster</div>
+      <div class="sub">Envía el video de esta pestaña a tu TV</div>
+    </div>
+  </header>
+  <div id="list" class="list"></div>
+  <div id="toast" class="toast"></div>
+  <footer>
+    <span>Toca un video → AirPlay</span>
+    <span id="ver"></span>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>

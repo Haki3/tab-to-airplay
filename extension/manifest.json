@@ -1,0 +1,43 @@
+{
+  "manifest_version": 3,
+  "name": "AirPlay Tab Caster",
+  "version": "1.0.0",
+  "description": "Detecta el video de la pestaña y te pregunta si quieres enviarlo por AirPlay a tu TV (vía un helper nativo de macOS).",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8Fd7eA44Nd44ll2nf4KyUdUzTvmQ1igvNPpgCIdklyFTx1F3Tq/rc3f2ucXb/PtAJrl3vtoa+rCuDZui7IFm0yjy6lp4LKXob9ORJxU0mnb+8JVw+3kkhUfL3nnx5qsE6wQcY2+jO75lIt42my9R0Fl6VMIfRgfLE/GZ3kZZpjtd9bFL/EMHAaGfktzgJXYwbp72J5rXeo4q3Njfkc1TQMrEvkQ160WcvwpIQF+kDEhReyiMJqN8oWQfn6REcSD24T2F1UnjW+7QCtQPICmTOKihviQH8odBo09INCyIXI4oiJruRK/u04Utk8mkoYrBD35TRLGY8+bqS3VtlwX5JwIDAQAB",
+  "permissions": [
+    "nativeMessaging",
+    "activeTab",
+    "scripting",
+    "tabs",
+    "storage",
+    "webRequest",
+    "cookies"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "AirPlay esta pestaña",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

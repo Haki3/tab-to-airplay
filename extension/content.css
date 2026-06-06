@@ -1,0 +1,3 @@
+/* Styling for the floating button lives inside a Shadow DOM (see content.js) so the
+   host page's CSS can't break it. This file only guards the host wrapper. */
+#__airplay_tab_caster_host__ { all: initial; position: static; }
