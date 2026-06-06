@@ -13,6 +13,11 @@ document.getElementById("logo").innerHTML = AIRPLAY_SVG;
 document.getElementById("ver").textContent = "v" + (chrome.runtime.getManifest().version || "");
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+function fmtDur(s) {
+  if (!s) return ""; s = Math.round(s);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+}
 
 async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -54,12 +59,15 @@ function render(items, tab) {
   }
   listEl.innerHTML = "";
   items.forEach((it) => {
-    const chip = it.kind === "hls" ? "HLS" : it.live ? "EN VIVO" : "VIDEO";
+    const kindLabel = it.kind === "hls" ? (it.live ? "HLS · EN VIVO" : "HLS") : "VIDEO";
+    const rec = it.recommended ? `<span class="chip rec">★ Probable</span>` : "";
+    const dur = it.durationSec ? `<div class="meta"><span class="dur">⏱ ${fmtDur(it.durationSec)}</span></div>` : "";
     const card = document.createElement("div");
-    card.className = "card";
+    card.className = "card" + (it.recommended ? " rec" : "");
     card.innerHTML = `
-      <div class="top"><span class="name">${esc(it.label)}</span>
-        <span class="chip ${it.live ? "live" : ""}">${chip}</span></div>
+      <div class="top"><span class="name">${esc(it.label)}</span>${rec}
+        <span class="chip ${it.live ? "live" : ""}">${kindLabel}</span></div>
+      ${dur}
       <div class="url">${esc(it.src)}</div>
       <button>${AIRPLAY_SVG}<span>Enviar a AirPlay</span></button>`;
     card.querySelector("button").onclick = (e) => send(it, tab, e.currentTarget);
@@ -94,5 +102,26 @@ async function send(it, tab, btn) {
 (async () => {
   loading();
   const tab = await activeTab();
-  render(await collect(tab), tab);
+  const items = await collect(tab);
+  render(items, tab);
+  if (!items.length) return;
+
+  toast("Analizando candidatos para detectar el video real…");
+  let res;
+  try {
+    res = await chrome.runtime.sendMessage({
+      type: "analyze", items: items.map((c) => ({ url: c.src, kind: c.kind, live: c.live })),
+    });
+  } catch (_) {}
+  if (res && res.items) {
+    const by = {};
+    res.items.forEach((a) => { by[a.url] = a; });
+    items.forEach((c) => {
+      const a = by[c.src];
+      if (a) { c.durationSec = a.durationSec; c.recommended = a.recommended; c.isMaster = a.isMaster; c.live = a.live; c.score = a.score; }
+    });
+    items.sort((x, y) => (y.score || 0) - (x.score || 0));
+    render(items, tab);
+  }
+  toastEl.className = "toast"; // hide the analyzing notice
 })();

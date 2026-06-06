@@ -110,7 +110,12 @@
     .chip { font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
             padding: 2px 7px; border-radius: 999px; background: rgba(10,132,255,.2); color: #6cb2ff; }
     .chip.live { background: rgba(48,209,88,.2); color: #4fd877; }
+    .chip.rec { background: rgba(255,179,64,.22); color: #ffc266; }
+    .vid.rec { box-shadow: inset 0 0 0 1.5px rgba(255,179,64,.55); background: rgba(255,179,64,.06); }
+    .vid .meta { display: flex; align-items: center; gap: 7px; margin: -1px 0 6px; }
+    .vid .dur { font-size: 11px; color: #c9c9ce; font-weight: 600; }
     .vid .url { font-size: 11px; color: #98989d; word-break: break-all; line-height: 1.35; max-height: 2.7em; overflow: hidden; }
+    .analyzing { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #98989d; margin-top: 4px; }
 
     .switch { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 10px; }
     .switch span { font-size: 11.5px; color: #98989d; }
@@ -222,11 +227,38 @@
   function openPanel() {
     open = true; panel.classList.add("open");
     renderLoading();
-    gather().then((list) => { candidates = list; idx = 0; render(); });
+    gather().then(async (list) => {
+      candidates = list; idx = 0;
+      render(list.length > 0);              // immediate render (analyzing hint)
+      if (!list.length) return;
+      let res;
+      try {
+        res = await chrome.runtime.sendMessage({
+          type: "analyze", items: list.map((c) => ({ url: c.src, kind: c.kind, live: c.live })),
+        });
+      } catch (_) {}
+      if (!open) return;
+      if (res && res.items) {
+        const by = {};
+        res.items.forEach((a) => { by[a.url] = a; });
+        candidates.forEach((c) => {
+          const a = by[c.src];
+          if (a) { c.durationSec = a.durationSec; c.recommended = a.recommended; c.isMaster = a.isMaster; c.live = a.live; c.score = a.score; c.analyzed = a.ok; }
+        });
+        candidates.sort((x, y) => (y.score || 0) - (x.score || 0));
+        idx = 0;
+      }
+      render(false);
+    });
   }
   function closePanel() { open = false; panel.classList.remove("open"); }
 
   const esc = (s) => String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+  function fmtDur(s) {
+    if (!s) return ""; s = Math.round(s);
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    return h ? `${h}h ${m}m` : m ? `${m}m ${sec}s` : `${sec}s`;
+  }
 
   function renderLoading() {
     panel.innerHTML = `
@@ -236,7 +268,7 @@
     panel.querySelector(".x").onclick = closePanel;
   }
 
-  function render() {
+  function render(analyzing) {
     const c = candidates[idx];
     if (!c) {
       panel.innerHTML = `
@@ -251,17 +283,23 @@
       return;
     }
     const more = candidates.length > 1
-      ? `<div class="switch"><span>${idx + 1} de ${candidates.length} videos</span><button id="nx">Otro ↻</button></div>` : "";
+      ? `<div class="switch"><span>${idx + 1} de ${candidates.length} candidatos</span><button id="nx">Otro ↻</button></div>` : "";
+    const kindLabel = c.kind === "hls" ? (c.live ? "HLS · EN VIVO" : "HLS") : "VIDEO";
+    const dur = c.durationSec ? `<span class="dur">⏱ ${fmtDur(c.durationSec)}</span>` : "";
+    const rec = c.recommended ? `<span class="chip rec">★ Probable</span>` : "";
+    const analyzingRow = analyzing
+      ? `<div class="analyzing"><span class="spinner"></span>Analizando ${candidates.length} candidato(s)…</div>` : "";
     panel.innerHTML = `
       <div class="hd"><span class="ic">${AIRPLAY_SVG}</span><span class="t">¿Enviar a tu TV?</span>
         <button class="x" aria-label="Cerrar">×</button></div>
       <div class="bd">
-        <div class="vid">
-          <div class="row1"><span class="name">${esc(c.label)}</span>
-            <span class="chip ${c.live ? "live" : ""}">${c.kind === "hls" ? "HLS" : c.live ? "EN VIVO" : "VIDEO"}</span></div>
+        <div class="vid ${c.recommended ? "rec" : ""}">
+          <div class="row1"><span class="name">${esc(c.label)}</span>${rec}</div>
+          <div class="meta"><span class="chip ${c.live ? "live" : ""}">${kindLabel}</span>${dur}</div>
           <div class="url">${esc(c.src)}</div>
         </div>
         ${more}
+        ${analyzingRow}
         <div class="btns">
           <button class="btn primary" id="go">${AIRPLAY_SVG}<span>Enviar a AirPlay</span></button>
           <button class="btn ghost" id="cancel">Cancelar</button>
@@ -272,7 +310,7 @@
     panel.querySelector("#cancel").onclick = closePanel;
     panel.querySelector("#go").onclick = () => send(c);
     const nx = panel.querySelector("#nx");
-    if (nx) nx.onclick = () => { idx = (idx + 1) % candidates.length; render(); };
+    if (nx) nx.onclick = () => { idx = (idx + 1) % candidates.length; render(false); };
   }
 
   function setStatus(html, cls = "") {

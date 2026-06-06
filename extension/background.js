@@ -94,8 +94,112 @@ async function sendToNative({ url, referer, title }) {
   });
 }
 
+// ---- Candidate analysis: rank streams by real content / duration --------------
+// Chrome (this worker) can fetch the playlists directly (its session + Secure DNS),
+// so we download each .m3u8, sum the segment durations, and surface the longest one
+// as the likely real video (vs short ads/clips/previews).
+
+async function fetchText(url, ms = 7000) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const r = await fetch(url, { credentials: "include", signal: ctrl.signal, redirect: "follow" });
+    clearTimeout(t);
+    if (!r.ok) return { ok: false, status: r.status };
+    return { ok: true, text: await r.text(), finalUrl: r.url, contentType: r.headers.get("content-type") || "" };
+  } catch (e) {
+    clearTimeout(t);
+    return { ok: false, error: String(e) };
+  }
+}
+
+function sumDurations(playlist) {
+  let total = 0, n = 0;
+  const re = /#EXTINF:\s*([\d.]+)/g;
+  let m;
+  while ((m = re.exec(playlist))) { total += parseFloat(m[1]) || 0; n++; }
+  return { total, segments: n };
+}
+
+// Pick the highest-bandwidth variant URI from a master playlist (absolute URL).
+function bestVariant(master, baseUrl) {
+  const lines = master.split(/\r?\n/);
+  let bestBw = -1, bestUri = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].startsWith("#EXT-X-STREAM-INF")) {
+      const bw = parseInt((lines[i].match(/BANDWIDTH=(\d+)/) || [])[1] || "0", 10);
+      // the URI is the next non-comment, non-empty line
+      for (let j = i + 1; j < lines.length; j++) {
+        const u = lines[j].trim();
+        if (!u) continue;
+        if (u.startsWith("#")) break;
+        if (bw >= bestBw) { bestBw = bw; bestUri = u; }
+        break;
+      }
+    }
+  }
+  if (!bestUri) return null;
+  try { return new URL(bestUri, baseUrl).href; } catch (_) { return null; }
+}
+
+async function analyzeOne(it) {
+  const out = { url: it.url, kind: it.kind, ok: false, durationSec: 0, isMaster: false, live: !!it.live };
+  const isM3u8 = it.kind === "hls" || /\.m3u8(\?|#|$)/i.test(it.url);
+  try {
+    if (isM3u8) {
+      const r = await fetchText(it.url);
+      if (r.ok && /#EXTM3U/.test(r.text)) {
+        out.ok = true;
+        const base = r.finalUrl || it.url;
+        if (/#EXT-X-STREAM-INF/.test(r.text)) {
+          out.isMaster = true;
+          const variant = bestVariant(r.text, base);
+          if (variant) {
+            const v = await fetchText(variant);
+            if (v.ok && /#EXTINF/.test(v.text)) {
+              const d = sumDurations(v.text);
+              out.durationSec = d.total; out.segments = d.segments;
+              out.live = !/#EXT-X-ENDLIST/.test(v.text);
+            }
+          }
+        } else if (/#EXTINF/.test(r.text)) {
+          const d = sumDurations(r.text);
+          out.durationSec = d.total; out.segments = d.segments;
+          out.live = !/#EXT-X-ENDLIST/.test(r.text);
+        }
+      }
+    } else {
+      const h = await fetch(it.url, { method: "HEAD", credentials: "include" }).catch(() => null);
+      if (h && h.ok) { out.ok = true; out.sizeBytes = parseInt(h.headers.get("content-length") || "0", 10) || 0; }
+    }
+  } catch (_) { /* leave ok=false */ }
+  return out;
+}
+
+function scoreOf(a) {
+  if (a.durationSec > 0) return a.durationSec;          // real video: longer = better
+  if (a.isMaster && a.ok) return 0.5;                   // master playlist, duration unknown
+  if (a.sizeBytes) return Math.min(a.sizeBytes / 1e6, 0.4); // mp4 size proxy, capped below real durations
+  if (a.ok) return 0.05;
+  return 0;
+}
+
+async function analyzeCandidates(items) {
+  const analyzed = await Promise.all((items || []).map(analyzeOne));
+  analyzed.forEach((a) => { a.score = scoreOf(a); });
+  analyzed.sort((x, y) => y.score - x.score);
+  // Mark the best as the likely stream when we have a meaningful signal.
+  if (analyzed.length && analyzed[0].score > 0) analyzed[0].recommended = true;
+  return { items: analyzed };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || !msg.type) return;
+
+  if (msg.type === "analyze") {
+    analyzeCandidates(msg.items).then(sendResponse);
+    return true; // async
+  }
 
   if (msg.type === "getSniffed") {
     const tabId = msg.tabId ?? sender.tab?.id ?? -1;
