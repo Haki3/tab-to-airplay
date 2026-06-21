@@ -124,8 +124,23 @@ def lan_ip():
 
 
 LAN = lan_ip()
+SERVE_HOST = LAN          # host advertised in play URLs; may drop to loopback (see below)
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 PNG_IEND = b"IEND\xae\x42\x60\x82"
+
+
+def playback_host():
+    """Pick the host AVPlayer should connect to. Normally the LAN IP (so the TV can
+    reach it too). But if our own LAN IP isn't reachable — e.g. a VPN like ProtonVPN
+    is blocking the local subnet — fall back to loopback so at least local playback
+    works (the TV still won't be reachable until LAN access is restored)."""
+    try:
+        s = socket.create_connection((LAN, PORT), timeout=1.5)
+        s.close()
+        return LAN
+    except Exception:
+        log("LAN %s unreachable (VPN blocking local network?) -> using 127.0.0.1" % LAN)
+        return "127.0.0.1"
 
 
 def b64u(s):
@@ -137,7 +152,7 @@ def unb64u(s):
 
 
 def prox_url(absolute, sid):
-    return "http://%s:%d/s/%s/%s" % (LAN, PORT, sid, b64u(absolute))
+    return "http://%s:%d/s/%s/%s" % (SERVE_HOST, PORT, sid, b64u(absolute))
 
 
 def rewrite_playlist(text, base, sid):
@@ -313,6 +328,8 @@ def handle_play(msg):
         return
     sid = "%08x%08x" % (next_id(), int(time.time()) & 0xffffffff)
     sessions[sid] = {"created": time.time()}
+    global SERVE_HOST
+    SERVE_HOST = playback_host()
     play_url = prox_url(url, sid)
     app = os.path.join(HERE, "AirPlayCaster.app")
     if not os.path.isdir(app):
