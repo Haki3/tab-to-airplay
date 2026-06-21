@@ -101,6 +101,18 @@ def request_fetch(url, rng=None, timeout=30):
 # ---- helpers ----------------------------------------------------------------
 
 def lan_ip():
+    # Prefer a real physical interface (en0/en1/...). The default-route trick below
+    # returns the VPN tunnel IP (e.g. ProtonVPN 10.x) when a VPN is up, and neither
+    # AVPlayer nor the TV can reach that — so query the LAN interfaces directly first.
+    for iface in ("en0", "en1", "en2", "en3", "en4", "en5"):
+        try:
+            r = subprocess.run(["ipconfig", "getifaddr", iface],
+                               capture_output=True, text=True, timeout=3)
+            ip = r.stdout.strip()
+            if ip and not ip.startswith("169.254."):
+                return ip
+        except Exception:
+            pass
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
