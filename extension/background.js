@@ -60,73 +60,37 @@ function getSniffedList(tabId) {
   return Array.from(m.values()).sort((a, b) => b.ts - a.ts);
 }
 
-// ---- Native bridge -----------------------------------------------------------
-// A persistent port to the macOS host. The host runs the LAN relay and asks US to
-// fetch each URL, so streams behind Cloudflare's JS challenge load using the browser
-// session that already solved it. We fetch with credentials -> cookies (incl.
-// cf_clearance) are sent automatically per host.
-
-let bridgePort = null;
-
-function arrayBufferToBase64(buf) {
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  const CH = 0x8000;
-  for (let i = 0; i < bytes.length; i += CH) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
-  }
-  return btoa(binary);
-}
-
-async function bridgeFetch(req) {
-  const { id, url, range } = req;
+async function buildCookieHeader(url) {
   try {
-    const headers = {};
-    if (range) headers.Range = range;
-    const r = await fetch(url, { credentials: "include", headers, redirect: "follow" });
-    const buf = await r.arrayBuffer();
-    bridgePort && bridgePort.postMessage({
-      type: "fetchResult", id, ok: true, status: r.status,
-      contentType: r.headers.get("content-type") || "", finalUrl: r.url,
-      bodyB64: arrayBufferToBase64(buf),
-    });
-  } catch (e) {
-    bridgePort && bridgePort.postMessage({ type: "fetchResult", id, ok: false, error: String(e) });
+    const cookies = await chrome.cookies.getAll({ url });
+    if (!cookies || !cookies.length) return "";
+    return cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  } catch (_) {
+    return "";
   }
 }
 
-function getBridge() {
-  if (bridgePort) return bridgePort;
-  const port = chrome.runtime.connectNative(NATIVE_HOST);
-  bridgePort = port;
-  port.onMessage.addListener((msg) => {
-    if (!msg) return;
-    if (msg.type === "fetch") bridgeFetch(msg);
-    else if (msg.type === "ping") { try { port.postMessage({ type: "pong" }); } catch (_) {} }
-  });
-  port.onDisconnect.addListener(() => { bridgePort = null; });
-  return port;
-}
-
-function sendToNative({ url, title, referer }) {
+async function sendToNative({ url, referer, title }) {
+  const cookie = await buildCookieHeader(url);
+  const message = {
+    url,
+    referer: referer || "",
+    title: title || "",
+    cookie,
+    userAgent: navigator.userAgent || ""
+  };
   return new Promise((resolve) => {
-    let port;
-    try { port = getBridge(); }
-    catch (e) { resolve({ ok: false, nativeMissing: true, error: String(e) }); return; }
-
-    let done = false;
-    const finish = (r) => { if (!done) { done = true; cleanup(); resolve(r); } };
-    const onMsg = (m) => { if (m && m.type === "played") finish(m.ok === false ? { ok: false, error: m.error } : { ok: true }); };
-    const onDisc = () => finish({ ok: false, nativeMissing: true, error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || "host disconnected" });
-    function cleanup() {
-      try { port.onMessage.removeListener(onMsg); } catch (_) {}
-      try { port.onDisconnect.removeListener(onDisc); } catch (_) {}
+    try {
+      chrome.runtime.sendNativeMessage(NATIVE_HOST, message, (response) => {
+        if (chrome.runtime.lastError) {
+          resolve({ ok: false, error: chrome.runtime.lastError.message, nativeMissing: true });
+        } else {
+          resolve(response || { ok: true });
+        }
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String(e), nativeMissing: true });
     }
-    port.onMessage.addListener(onMsg);
-    port.onDisconnect.addListener(onDisc);
-    try { port.postMessage({ type: "play", url, title: title || "", referer: referer || "" }); }
-    catch (e) { finish({ ok: false, nativeMissing: true, error: String(e) }); }
-    setTimeout(() => finish({ ok: true }), 6000); // assume launched if no explicit ack
   });
 }
 
