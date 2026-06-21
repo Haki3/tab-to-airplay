@@ -31,32 +31,30 @@ So AirPlay Tab Caster splits the job:
 - ✅ **Playback pre-check.** Before listing anything, it probes the first segment of each candidate and **hides the ones that don't actually load** (dead links, 403s, expired tokens) — no more "tap → stuck loading".
 - 📋 **Picker popup.** Lists only the videos that play, ranked by duration.
 - 🔗 **Real AirPlay.** Plays through `AVPlayer` and the native macOS route picker — not screen mirroring.
-- 🌐 **DNS-resilient.** The relay resolves hosts over **DoH** (like Chrome's Secure DNS), so locally blocked domains still work.
-- 🛡️ **Session-aware.** Forwards your browser **User-Agent + cookies + referer**, so streams behind bot protection load.
+- 🌐 **Browser-powered fetching.** The relay asks **Chrome** to fetch every segment, so anything your browser can load — DNS-blocked domains, **Cloudflare "Just a moment" JS-challenge sites**, login-gated streams — plays on the TV, using the session that already solved it.
 - 🧩 **Smart relay.** Rewrites HLS playlists and serves them from your Mac's LAN address, so the TV can always reach the content.
 - 🔓 **De-obfuscation.** Some sites disguise each video chunk as a tiny PNG; the relay unwraps it back to real MPEG-TS/fMP4.
 
 ## How it works
 
 ```
-Chrome (extension)            detects the video → asks → sends
-  │  URL + cookies + User-Agent
-  ▼
-airplay_host.py               starts the relay, registers a session
-  │
-  ▼
-hls_proxy.py  (LAN relay)  ──  resolves hosts via DoH (bypasses DNS blocks)
-  │                        ──  sends browser User-Agent + cookies + referer
-  │                        ──  rewrites HLS so every segment/key flows back through it
-  │                        ──  unwraps PNG-disguised segments → real MPEG-TS
-  │                        ──  listens on your Mac's LAN IP
-  ▼
-AirPlayCaster.app             AVPlayer plays http://<lan-ip>:57842/…
-  │
-  ▼  AirPlay → your TV   (the TV reaches the relay over the LAN, so handoff just works)
+AirPlayCaster.app / TV ──pull──►  airplay_host.py  (LAN relay on your Mac, :57842)
+                                        │  needs bytes for a URL
+                                        ▼  native messaging
+                                  Chrome extension  ── fetch() with the page's session:
+                                        │              solves Cloudflare, sends cf_clearance,
+                                        ▼              uses Secure DNS — just like a tab
+                                     origin CDN
+                                        │
+                                        ▼  bytes flow back; the relay rewrites HLS playlists
+                                           and unwraps PNG-disguised segments before serving
 ```
 
-For simple public videos the relay is a transparent passthrough; the machinery only matters for protected streams.
+Two things make hard streams work:
+1. **Chrome does the fetching**, so anything the browser can load works — including sites behind
+   Cloudflare's "Just a moment" JS challenge that no standalone player/relay can pass.
+2. **The relay is served from your Mac's LAN IP**, so the TV can always reach it (AirPlay handoff
+   or relay — either way).
 
 ## Requirements
 
@@ -96,7 +94,8 @@ This compiles `AirPlayCaster.app` (Objective-C + AVKit via `clang`), creates the
 | Direct `.mp4` / `.webm` / `.mov` | ✅ |
 | HLS streams (`.m3u8`), public or private | ✅ |
 | X/Twitter, Reddit, news sites, embedded players | ✅ |
-| Streams blocked by local DNS / behind Cloudflare | ✅ (via the relay: DoH + UA + cookies) |
+| Streams blocked by local DNS | ✅ (Chrome's Secure DNS does the lookup) |
+| Cloudflare "Just a moment" JS-challenge sites | ✅ (Chrome solved it; the relay fetches through Chrome) |
 | Segments disguised as PNG (anti-bot) | ✅ (relay unwraps them to MPEG-TS) |
 | Login-gated videos | ✅ usually (Chrome cookies are forwarded) |
 | **YouTube / YouTube Shorts** | ❌ — video is served via encrypted MSE/`blob:`; there's no URL to capture |
@@ -111,7 +110,7 @@ This compiles `AirPlayCaster.app` (Objective-C + AVKit via `clang`), creates the
 | "Native helper not found" | Run `bash install.sh` again and reload the extension. |
 | "Couldn't play / permission error" | The origin needs more than can be forwarded (single-use token, strict TLS fingerprint). Check `native/proxy.log`. |
 | TV doesn't appear in the AirPlay menu | Mac and TV on the same Wi-Fi; AirPlay enabled on the TV. Accept the macOS "local network" prompt the first time. |
-| Want to debug | `native/proxy.log` (every relay request + DoH resolution) and `native/player.log` (AVPlayer errors with HTTP codes). |
+| Want to debug | `native/proxy.log` (every relay request + bridge fetch) and `native/player.log` (AVPlayer errors with HTTP codes). |
 
 ## Project structure
 
@@ -127,8 +126,7 @@ airplay-tab-caster/
 │   ├── Sources/main.m        # AirPlayCaster.app (Obj-C + AVKit)
 │   ├── Info.plist
 │   ├── build.sh              # compiles the .app
-│   ├── airplay_host.py       # native-messaging host (boots the relay)
-│   ├── hls_proxy.py          # LAN relay: DoH + UA + HLS rewrite + PNG unwrap
+│   ├── airplay_host.py       # native bridge: LAN relay + fetch-via-Chrome + HLS rewrite + PNG unwrap
 │   └── generate_icons.py
 ├── install.sh                # build + register with Chrome
 └── LICENSE
@@ -136,9 +134,13 @@ airplay-tab-caster/
 
 ## Technical notes
 
-- The relay (`hls_proxy.py`) listens on `0.0.0.0:57842` and shuts itself down after 20 min idle.
-- Host names are resolved over **DoH** (Cloudflare `1.1.1.1`, Google `8.8.8.8` fallback) to sidestep local DNS blocks — the same trick as Chrome's "Secure DNS".
-- Cookies are only sent to the master playlist's own registrable domain (never to third parties).
+- The native bridge (`airplay_host.py`) is spawned by Chrome via `connectNative`, runs the LAN
+  relay on `0.0.0.0:57842`, and exits ~5 min after playback stops.
+- Every upstream byte is fetched by the **extension** (`fetch` with credentials), so DNS, cookies
+  (incl. `cf_clearance`), and the Cloudflare challenge are all handled by Chrome itself — the relay
+  never talks to the origin directly.
+- Segment bytes travel extension → host as base64 over native messaging; the host rewrites HLS
+  playlists (so children route back through it) and unwraps PNG-disguised segments.
 - **PNG unwrap:** some sites wrap each chunk in a minimal 1×1 PNG with the real MPEG-TS/fMP4 appended after the `IEND` chunk. The relay detects the PNG, finds `IEND`, and serves only the real media with the correct `Content-Type`.
 - The native app is written in **Objective-C on purpose** — it avoids a Swift compiler/SDK version mismatch present in some Command Line Tools installs.
 
