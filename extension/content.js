@@ -111,6 +111,7 @@
             padding: 2px 7px; border-radius: 999px; background: rgba(10,132,255,.2); color: #6cb2ff; }
     .chip.live { background: rgba(48,209,88,.2); color: #4fd877; }
     .chip.rec { background: rgba(255,179,64,.22); color: #ffc266; }
+    .chip.warn { background: rgba(255,159,10,.18); color: #ffb340; }
     .vid.rec { box-shadow: inset 0 0 0 1.5px rgba(255,179,64,.55); background: rgba(255,179,64,.06); }
     .vid .meta { display: flex; align-items: center; gap: 7px; margin: -1px 0 6px; }
     .vid .dur { font-size: 11px; color: #c9c9ce; font-weight: 600; }
@@ -250,7 +251,9 @@
             live: a.live, score: a.score, playable: a.playable, analyzed: a.ok,
           });
         });
-        candidates = list.filter((c) => c.playable).sort((x, y) => (y.score || 0) - (x.score || 0));
+        // Show all candidates ranked (playable first); don't hide probe-failures —
+        // the bridge may still play them, so let the user choose.
+        candidates = list.slice().sort((x, y) => (y.score || 0) - (x.score || 0));
         analysisInfo = { total: res.total, viable: res.viable };
       } else {
         candidates = list; // analysis unavailable -> fall back to the unverified list
@@ -305,6 +308,7 @@
     const kindLabel = c.kind === "hls" ? (c.live ? "HLS · EN VIVO" : "HLS") : "VIDEO";
     const dur = c.durationSec ? `<span class="dur">⏱ ${fmtDur(c.durationSec)}</span>` : "";
     const rec = c.recommended ? `<span class="chip rec">★ Probable</span>` : "";
+    const unver = (c.playable === false) ? `<span class="chip warn">sin verificar</span>` : "";
     const analyzingRow = analyzing
       ? `<div class="analyzing"><span class="spinner"></span>Analizando ${candidates.length} candidato(s)…</div>` : "";
     panel.innerHTML = `
@@ -313,7 +317,7 @@
       <div class="bd">
         <div class="vid ${c.recommended ? "rec" : ""}">
           <div class="row1"><span class="name">${esc(c.label)}</span>${rec}</div>
-          <div class="meta"><span class="chip ${c.live ? "live" : ""}">${kindLabel}</span>${dur}</div>
+          <div class="meta"><span class="chip ${c.live ? "live" : ""}">${kindLabel}</span>${dur}${unver}</div>
           <div class="url">${esc(c.src)}</div>
         </div>
         ${more}

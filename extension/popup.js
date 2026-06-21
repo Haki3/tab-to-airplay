@@ -66,7 +66,8 @@ function render(items, tab) {
   listEl.innerHTML = "";
   items.forEach((it) => {
     const kindLabel = it.kind === "hls" ? (it.live ? "HLS · EN VIVO" : "HLS") : "VIDEO";
-    const rec = it.recommended ? `<span class="chip rec">★ Probable</span>` : "";
+    const rec = it.recommended ? `<span class="chip rec">★ Probable</span>`
+      : (it.playable === false ? `<span class="chip warn">sin verificar</span>` : "");
     const dur = it.durationSec ? `<div class="meta"><span class="dur">⏱ ${fmtDur(it.durationSec)}</span></div>` : "";
     const card = document.createElement("div");
     card.className = "card" + (it.recommended ? " rec" : "");
@@ -131,7 +132,9 @@ async function send(it, tab, btn) {
         live: a.live, score: a.score, playable: a.playable,
       });
     });
-    items = found.filter((c) => c.playable).sort((x, y) => (y.score || 0) - (x.score || 0));
+    // Show all ranked (playable first); don't hide probe-failures — the bridge may
+    // still play them.
+    items = found.slice().sort((x, y) => (y.score || 0) - (x.score || 0));
     analysisInfo = { total: res.total, viable: res.viable };
   }
   render(items, tab);
